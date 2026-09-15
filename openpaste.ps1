@@ -44,17 +44,20 @@ public static class OpenPasteKbd {
 "@
 }
 
-Write-Host "Paste text here, then press Enter:"
-$text = [Console]::ReadLine()
-if ([string]::IsNullOrWhiteSpace($text)) {
-  Write-Host "Cancelled."
-  exit 0
-}
+Write-Host "Paste text, then Enter. Empty line quits."
+while ($true) {
+  Write-Host "Paste here:"
+  $text = [Console]::ReadLine()
+  if ([string]::IsNullOrWhiteSpace($text)) {
+    Write-Host "Bye."
+    break
+  }
 
-Write-Host "Click the target box in 3 seconds..."
-3..1 | ForEach-Object {
-  Write-Host $_
-  Start-Sleep -Seconds 1
+  Write-Host "Click the target box in 3 seconds..."
+  3..1 | ForEach-Object {
+    Write-Host $_
+    Start-Sleep -Seconds 1
+  }
+  [OpenPasteKbd]::Type($text)
+  Write-Host "Done. Next round, or Enter to quit."
 }
-[OpenPasteKbd]::Type($text)
-Write-Host "Done."
