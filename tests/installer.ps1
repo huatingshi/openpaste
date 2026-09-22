@@ -4,7 +4,7 @@ $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('openpaste-install-test-' + [g
 $testSource = Join-Path $testRoot 'source'
 $testProfile = Join-Path $testRoot 'profile'
 New-Item -ItemType Directory -Path $testSource -Force | Out-Null
-$files = @('openpaste.ps1', 'openpaste.cmd', 'OpenPasteHost.cs')
+$files = @('openpaste.ps1', 'openpaste.cmd', 'OpenPasteHost.cs', 'TerminalUi.cs')
 foreach ($file in $files) { Copy-Item -LiteralPath (Join-Path $repo $file) -Destination $testSource }
 
 # Redirect both installation and PATH access into this test's fresh sandbox.

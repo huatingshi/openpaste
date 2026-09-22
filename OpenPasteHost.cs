@@ -1,6 +1,5 @@
 using System;
 using System.ComponentModel;
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -31,6 +30,7 @@ namespace OpenPaste
         private bool multiline;
         private readonly Func<string> readCommand;
         private readonly string settingsPath;
+        private readonly Action<string, int, bool, bool> updateView;
         private string hotkey;
         private int activeTriggerId = TriggerId;
         private bool triggerRegistered;
@@ -38,7 +38,8 @@ namespace OpenPaste
         private bool cancelled;
 
         internal Session(IDesktop desktop, Action<string> report, int interval, bool multiline,
-            Func<string> readCommand = null, string settingsPath = null)
+            Func<string> readCommand = null, string settingsPath = null,
+            Action<string, int, bool, bool> updateView = null)
         {
             this.desktop = desktop;
             this.report = report;
@@ -46,6 +47,7 @@ namespace OpenPaste
             this.multiline = multiline;
             this.readCommand = readCommand;
             this.settingsPath = settingsPath;
+            this.updateView = updateView;
         }
 
         internal void Stop() { stopping = true; }
@@ -60,9 +62,13 @@ namespace OpenPaste
             triggerRegistered = true;
             try
             {
-                report("OpenPaste active: " + hotkey + " types clipboard text. Esc cancels input. Ctrl+C exits.");
-                report(multiline ? "Multiline enabled: line breaks send Enter." : "Line breaks and tabs become spaces.");
-                report("Enter /help for settings or /quit to exit. Settings changes are saved automatically.");
+                if (updateView != null) RefreshView();
+                else
+                {
+                    report("OpenPaste active: " + hotkey + " types clipboard text. Esc cancels input. Ctrl+C exits.");
+                    report(multiline ? "Multiline enabled: line breaks send Enter." : "Line breaks and tabs become spaces.");
+                    report("Enter /help for settings or /quit to exit. Settings changes are saved automatically.");
+                }
                 while (!stopping)
                 {
                     string command = readCommand == null ? null : readCommand();
@@ -127,6 +133,7 @@ namespace OpenPaste
                     case "/pause":
                         if (triggerRegistered) desktop.Unregister(activeTriggerId);
                         triggerRegistered = false;
+                        RefreshView();
                         report("Paused. Enter /resume to enable the shortcut.");
                         break;
                     case "/resume":
@@ -137,6 +144,7 @@ namespace OpenPaste
                             desktop.Register(activeTriggerId, modifiers, key);
                             triggerRegistered = true;
                         }
+                        RefreshView();
                         report("Shortcut active: " + hotkey);
                         break;
                     case "/quit":
@@ -149,6 +157,7 @@ namespace OpenPaste
 
         private void ReportSetting(string message)
         {
+            RefreshView();
             if (settingsPath != null)
             {
                 try
@@ -162,6 +171,11 @@ namespace OpenPaste
                 }
             }
             report(message);
+        }
+
+        private void RefreshView()
+        {
+            if (updateView != null) updateView(hotkey, interval, multiline, triggerRegistered);
         }
 
         private void ChangeHotkey(string value)
@@ -436,71 +450,6 @@ namespace OpenPaste
         }
     }
 
-    internal sealed class ConsoleCommands
-    {
-        private readonly StringBuilder line = new StringBuilder();
-        private readonly ConcurrentQueue<string> redirected = new ConcurrentQueue<string>();
-        private readonly bool isRedirected = Console.IsInputRedirected;
-
-        internal ConsoleCommands()
-        {
-            if (isRedirected)
-            {
-                // A piped command stream can block; this process-owned reader never handles hotkeys.
-                var reader = new Thread(delegate()
-                {
-                    try
-                    {
-                        string value;
-                        while ((value = Console.ReadLine()) != null) redirected.Enqueue(value);
-                    }
-                    catch (IOException) { }
-                    finally { redirected.Enqueue("/quit"); }
-                });
-                reader.IsBackground = true;
-                reader.Start();
-            }
-        }
-
-        internal string Poll()
-        {
-            if (isRedirected)
-            {
-                string value;
-                return redirected.TryDequeue(out value) ? value : null;
-            }
-            while (Console.KeyAvailable)
-            {
-                ConsoleKeyInfo key = Console.ReadKey(true);
-                if (key.Key == ConsoleKey.Enter)
-                {
-                    Console.WriteLine();
-                    string value = line.ToString();
-                    line.Clear();
-                    return value;
-                }
-                if (key.Key == ConsoleKey.Backspace && line.Length > 0)
-                {
-                    line.Length--;
-                    Console.Write("\b \b");
-                }
-                else if (!Char.IsControl(key.KeyChar) && line.Length < 512)
-                {
-                    line.Append(key.KeyChar);
-                    Console.Write(key.KeyChar);
-                }
-            }
-            return null;
-        }
-
-        internal void Report(string message)
-        {
-            if (!isRedirected) Console.WriteLine();
-            Console.WriteLine(message);
-            if (!isRedirected) Console.Write("openpaste> " + line);
-        }
-    }
-
     public static class Program
     {
         public static void Run(string hotkey, int interval, bool multiline)
@@ -528,10 +477,12 @@ namespace OpenPaste
             if (!String.IsNullOrEmpty(hotkey)) settings.Hotkey = hotkey;
             if (interval >= 0) settings.Interval = interval;
             if (multiline >= 0) settings.Multiline = multiline != 0;
-            var commands = new ConsoleCommands();
-            var session = new Session(new Desktop(), commands.Report, settings.Interval, settings.Multiline,
-                commands.Poll, path);
-            WithConsoleHandler(session, delegate { session.Run(settings.Hotkey); });
+            using (var commands = new ConsoleCommands())
+            {
+                var session = new Session(new Desktop(), commands.Report, settings.Interval, settings.Multiline,
+                    commands.Poll, path, commands.UpdateStatus);
+                WithConsoleHandler(session, delegate { session.Run(settings.Hotkey); });
+            }
         }
 
         public static bool TypeManual(string text, int delaySeconds, int interval, bool multiline)

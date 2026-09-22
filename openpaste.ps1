@@ -17,6 +17,7 @@ if ($Help) {
   Write-Output "Line breaks and tabs become spaces; -Multiline sends Enter for line breaks."
   Write-Output "In-session commands: /help /settings /hotkey /speed /multiline /pause /resume /quit"
   Write-Output "Shortcut, speed and multiline changes are saved automatically."
+  Write-Output "Type / for the command menu. Up/Down selects, Tab completes, Enter confirms, Esc closes."
   return
 }
 
@@ -36,7 +37,7 @@ if (-not $HostProcess) {
   return
 }
 if (-not ('OpenPaste.Program' -as [type])) {
-  Add-Type -Path (Join-Path $PSScriptRoot 'OpenPasteHost.cs') -ReferencedAssemblies System.Windows.Forms
+  Add-Type -Path (Join-Path $PSScriptRoot 'OpenPasteHost.cs'), (Join-Path $PSScriptRoot 'TerminalUi.cs') -ReferencedAssemblies System.Windows.Forms
 }
 
 if ($Manual) {

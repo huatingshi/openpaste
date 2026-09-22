@@ -3,7 +3,7 @@ $dest = Join-Path $env:USERPROFILE 'bin'
 $base = 'https://raw.githubusercontent.com/huatingshi/openpaste/main'
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
-foreach ($file in @('openpaste.ps1', 'openpaste.cmd', 'OpenPasteHost.cs')) {
+foreach ($file in @('openpaste.ps1', 'openpaste.cmd', 'OpenPasteHost.cs', 'TerminalUi.cs')) {
   if ($PSScriptRoot) {
     Copy-Item (Join-Path $PSScriptRoot $file) (Join-Path $dest $file) -Force
   } else {
