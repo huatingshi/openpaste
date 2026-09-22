@@ -1,63 +1,37 @@
-﻿if (-not ('OpenPasteKbd' -as [type])) {
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class OpenPasteKbd {
-  [DllImport("user32.dll", SetLastError = true)]
-  static extern uint SendInput(uint n, INPUT[] i, int s);
-  [StructLayout(LayoutKind.Sequential)]
-  struct INPUT { public uint type; public InputUnion u; }
-  [StructLayout(LayoutKind.Explicit)]
-  struct InputUnion {
-    [FieldOffset(0)] public MOUSEINPUT mi;
-    [FieldOffset(0)] public KEYBDINPUT ki;
-    [FieldOffset(0)] public HARDWAREINPUT hi;
-  }
-  [StructLayout(LayoutKind.Sequential)]
-  struct MOUSEINPUT {
-    public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr extra;
-  }
-  [StructLayout(LayoutKind.Sequential)]
-  struct KEYBDINPUT {
-    public ushort vk, scan; public uint flags, time; public IntPtr extra;
-  }
-  [StructLayout(LayoutKind.Sequential)]
-  struct HARDWAREINPUT { public uint msg; public ushort l, h; }
-  const uint KEYUP = 2, UNICODE = 4;
-  public static void Type(string text) {
-    foreach (char c in text) {
-      if (c == '\r') continue;
-      INPUT[] a = new INPUT[2];
-      a[0].type = a[1].type = 1;
-      if (c == '\n') {
-        a[0].u.ki.vk = a[1].u.ki.vk = 13;
-        a[1].u.ki.flags = KEYUP;
-      } else {
-        a[0].u.ki.scan = a[1].u.ki.scan = c;
-        a[0].u.ki.flags = UNICODE;
-        a[1].u.ki.flags = UNICODE | KEYUP;
-      }
-      SendInput(2, a, Marshal.SizeOf(typeof(INPUT)));
-    }
-  }
-}
-"@
+param(
+  [switch]$Manual,
+  [string]$Hotkey = 'Ctrl+Alt+V',
+  [ValidateRange(0, 1000)][int]$IntervalMs = 10,
+  [ValidateRange(0, 60)][int]$DelaySeconds = 3,
+  [switch]$Multiline,
+  [switch]$Help
+)
+
+$ErrorActionPreference = 'Stop'
+if ($Help) {
+  Write-Output "openpaste [-Hotkey Ctrl+Alt+V] [-IntervalMs 10] [-Multiline]"
+  Write-Output "openpaste -Manual [-DelaySeconds 3] [-IntervalMs 10] [-Multiline]"
+  Write-Output "Copy text, focus the target field, then press the hotkey."
+  Write-Output "Esc cancels input. Ctrl+C or closing this terminal ends the session."
+  Write-Output "Line breaks and tabs become spaces; -Multiline sends Enter for line breaks."
+  return
 }
 
-Write-Host "Paste text, then Enter. Empty line quits."
-while ($true) {
-  Write-Host "Paste here:"
-  $text = [Console]::ReadLine()
-  if ([string]::IsNullOrWhiteSpace($text)) {
-    Write-Host "Bye."
-    break
-  }
+if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA') {
+  throw 'An STA session is required. Run openpaste.cmd or powershell -STA -File openpaste.ps1.'
+}
+if (-not ('OpenPaste.Program' -as [type])) {
+  Add-Type -Path (Join-Path $PSScriptRoot 'OpenPasteHost.cs') -ReferencedAssemblies System.Windows.Forms
+}
 
-  Write-Host "Click the target box in 3 seconds..."
-  3..1 | ForEach-Object {
-    Write-Host $_
-    Start-Sleep -Seconds 1
+if ($Manual) {
+  Write-Host 'Paste text, then Enter. Empty line quits. Ctrl+C exits.'
+  while ($true) {
+    Write-Host 'Paste here:'
+    $text = [Console]::ReadLine()
+    if ($null -eq $text -or $text.Length -eq 0) { break }
+    if (-not [OpenPaste.Program]::TypeManual($text, $DelaySeconds, $IntervalMs, $Multiline.IsPresent)) { break }
   }
-  [OpenPasteKbd]::Type($text)
-  Write-Host "Done. Next round, or Enter to quit."
+} else {
+  [OpenPaste.Program]::Run($Hotkey, $IntervalMs, $Multiline.IsPresent)
 }
