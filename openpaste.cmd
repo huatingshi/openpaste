@@ -1,2 +1,2 @@
 @echo off
-powershell -STA -NoProfile -ExecutionPolicy Bypass -File "%~dp0openpaste.ps1" %*
+powershell -STA -NoProfile -ExecutionPolicy Bypass -File "%~dp0openpaste.ps1" -HostProcess %*

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace OpenPaste
@@ -184,7 +185,121 @@ namespace OpenPaste
                 Assert(emoji.Length == 4 && emoji[0].u.ki.scan == 0xD83D && emoji[2].u.ki.scan == 0xDE00 &&
                     emoji[1].u.ki.flags == 6 && emoji[3].u.ki.flags == 6, "emoji batch is incomplete");
             });
-            Console.WriteLine("15 tests passed; no real clipboard access or input injection.");
+            Test("slash settings apply immediately and quit releases the listener", delegate
+            {
+                var d = new FakeDesktop();
+                var commands = new Queue<string>(new[] { "/speed 30", "/multiline on", "/settings", "/quit" });
+                var s = new Session(d, d.Messages.Add, 10, false, delegate { return commands.Dequeue(); });
+                s.Run("Ctrl+Alt+V");
+                Assert(d.Messages.Exists(x => x.Contains("Speed: 30 ms | Multiline: on")) && d.Registered.Count == 0,
+                    "settings were not updated or /quit leaked the hotkey");
+            });
+            Test("changed hotkey triggers input and stale old messages are ignored", delegate
+            {
+                var d = new FakeDesktop();
+                int step = 0;
+                d.Events.Enqueue(Session.TriggerId);
+                var s = new Session(d, d.Messages.Add, 10, false, delegate
+                {
+                    step++;
+                    if (step == 1) return "/hotkey Ctrl+Alt+P";
+                    if (step == 2) { d.Events.Enqueue(3); return null; }
+                    return "/quit";
+                });
+                s.Run("Ctrl+Alt+V");
+                Assert(d.Reads == 1 && d.Text == "abc" && d.Registered.Count == 0, "hotkey switch failed");
+            });
+            Test("conflicting new shortcut preserves the working shortcut", delegate
+            {
+                var d = new FakeDesktop { FailedId = 3 };
+                d.Events.Enqueue(Session.TriggerId);
+                var commands = new Queue<string>(new[] { "/hotkey Ctrl+Alt+P", "/settings", "/quit" });
+                var s = new Session(d, d.Messages.Add, 10, false, delegate { return commands.Dequeue(); });
+                s.Run("Ctrl+Alt+V");
+                Assert(d.Text == "abc" && d.Messages.Exists(x => x.StartsWith("Hotkey: Ctrl+Alt+V |")) &&
+                    d.Registered.Count == 0, "conflict disabled or changed the previous shortcut");
+            });
+            Test("pause releases and resume reacquires the hotkey", delegate
+            {
+                var d = new FakeDesktop();
+                int step = 0;
+                var s = new Session(d, d.Messages.Add, 10, false, delegate
+                {
+                    step++;
+                    if (step == 1) return "/pause";
+                    if (step == 2) { Assert(d.Registered.Count == 0, "paused hotkey still owned"); return "/resume"; }
+                    Assert(d.Registered.Contains(Session.TriggerId), "resume did not register");
+                    return "/quit";
+                });
+                s.Run("Ctrl+Alt+V");
+                Assert(d.Registered.Count == 0, "resume leaked registration");
+            });
+            Test("invalid commands preserve settings and never type terminal text", delegate
+            {
+                var d = new FakeDesktop();
+                var commands = new Queue<string>(new[] { "/speed -1", "/speed 1001", "/multiline maybe",
+                    "/hotkey V", "text in terminal", "/settings", "/quit" });
+                var s = new Session(d, d.Messages.Add, 10, false, delegate { return commands.Dequeue(); });
+                s.Run("Ctrl+Alt+V");
+                Assert(d.Reads == 0 && d.Messages.Exists(x => x.Contains("Speed: 10 ms | Multiline: off")), "invalid command changed state");
+            });
+            Test("multiple shortcut changes keep exactly one registration", delegate
+            {
+                var d = new FakeDesktop();
+                var commands = new Queue<string>(new[] { "/hotkey Ctrl+Alt+P", "/hotkey Ctrl+Alt+P",
+                    "/hotkey Ctrl+Alt+Q", "/hotkey Ctrl+Alt+R", "/quit" });
+                var s = new Session(d, d.Messages.Add, 10, false, delegate
+                {
+                    Assert(d.Registered.Count == 1, "shortcut swap lost or leaked a registration");
+                    return commands.Dequeue();
+                });
+                s.Run("Ctrl+Alt+V");
+                Assert(d.Registered.Count == 0, "last shortcut leaked");
+            });
+            Test("setting commands automatically persist only settings and replace existing files", delegate
+            {
+                string directory = Path.Combine(Path.GetTempPath(), "openpaste-settings-test-" + Guid.NewGuid().ToString("N"));
+                string path = Path.Combine(directory, "settings.ini");
+                var d = new FakeDesktop();
+                var commands = new Queue<string>(new[] { "/speed 45", "/hotkey Ctrl+Alt+P", "/multiline on",
+                    "/speed 60", "/quit" });
+                var s = new Session(d, d.Messages.Add, 10, false, delegate { return commands.Dequeue(); }, path);
+                s.Run("Ctrl+Alt+V");
+                Settings saved = Settings.Load(path);
+                Assert(saved.Hotkey == "Ctrl+Alt+P" && saved.Interval == 60 && saved.Multiline, "settings did not round trip");
+                Assert(File.ReadAllLines(path).Length == 3 && !File.ReadAllText(path).Contains(d.ClipboardText), "unexpected data saved");
+                File.WriteAllText(path, "interval_ms=-1");
+                bool rejected = false;
+                try { Settings.Load(path); } catch (FormatException) { rejected = true; }
+                Assert(rejected, "invalid saved speed accepted");
+            });
+            Test("each successful change saves immediately and invalid changes do not overwrite it", delegate
+            {
+                string path = Path.Combine(Path.GetTempPath(), "openpaste-unsaved-" + Guid.NewGuid().ToString("N"), "settings.ini");
+                var d = new FakeDesktop();
+                int step = 0;
+                new Session(d, d.Messages.Add, 10, false, delegate
+                {
+                    step++;
+                    if (step == 1) return "/speed 99";
+                    Assert(Settings.Load(path).Interval == 99, "change was not saved immediately");
+                    return step == 2 ? "/speed -1" : "/quit";
+                }, path).Run("Ctrl+Alt+V");
+            });
+            Test("save failures accurately report that the runtime setting still applies", delegate
+            {
+                string directory = Path.Combine(Path.GetTempPath(), "openpaste-save-error-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(directory);
+                string blocker = Path.Combine(directory, "not-a-directory");
+                File.WriteAllText(blocker, "block");
+                var d = new FakeDesktop();
+                var commands = new Queue<string>(new[] { "/speed 77", "/settings", "/quit" });
+                new Session(d, d.Messages.Add, 10, false, delegate { return commands.Dequeue(); },
+                    Path.Combine(blocker, "settings.ini")).Run("Ctrl+Alt+V");
+                Assert(d.Messages.Exists(x => x.Contains("could not save:")) &&
+                    d.Messages.Exists(x => x.Contains("Speed: 77 ms")), "save failure misreported runtime state");
+            });
+            Console.WriteLine("24 tests passed; no real clipboard access or input injection.");
         }
     }
 }

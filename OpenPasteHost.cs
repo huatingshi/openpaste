@@ -1,7 +1,10 @@
 using System;
 using System.ComponentModel;
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -24,17 +27,25 @@ namespace OpenPaste
         internal const int TriggerId = 1, CancelId = 2;
         private readonly IDesktop desktop;
         private readonly Action<string> report;
-        private readonly int interval;
-        private readonly bool multiline;
+        private int interval;
+        private bool multiline;
+        private readonly Func<string> readCommand;
+        private readonly string settingsPath;
+        private string hotkey;
+        private int activeTriggerId = TriggerId;
+        private bool triggerRegistered;
         private volatile bool stopping;
         private bool cancelled;
 
-        internal Session(IDesktop desktop, Action<string> report, int interval, bool multiline)
+        internal Session(IDesktop desktop, Action<string> report, int interval, bool multiline,
+            Func<string> readCommand = null, string settingsPath = null)
         {
             this.desktop = desktop;
             this.report = report;
             this.interval = interval;
             this.multiline = multiline;
+            this.readCommand = readCommand;
+            this.settingsPath = settingsPath;
         }
 
         internal void Stop() { stopping = true; }
@@ -42,24 +53,132 @@ namespace OpenPaste
 
         internal void Run(string hotkey)
         {
+            this.hotkey = hotkey;
             uint modifiers, key;
             Keyboard.ParseHotkey(hotkey, out modifiers, out key);
             desktop.Register(TriggerId, modifiers, key);
+            triggerRegistered = true;
             try
             {
                 report("OpenPaste active: " + hotkey + " types clipboard text. Esc cancels input. Ctrl+C exits.");
                 report(multiline ? "Multiline enabled: line breaks send Enter." : "Line breaks and tabs become spaces.");
+                report("Enter /help for settings or /quit to exit. Settings changes are saved automatically.");
                 while (!stopping)
                 {
+                    string command = readCommand == null ? null : readCommand();
+                    if (command != null) ExecuteCommand(command);
+                    if (stopping) break;
                     int id;
                     if (desktop.ReadHotkey(out id))
                     {
-                        if (id == TriggerId) Type(null, 0);
+                        if (triggerRegistered && id == activeTriggerId) Type(null, 0);
                     }
                     else desktop.Sleep(10);
                 }
             }
-            finally { desktop.Unregister(TriggerId); }
+            finally
+            {
+                if (triggerRegistered) desktop.Unregister(activeTriggerId);
+                triggerRegistered = false;
+            }
+        }
+
+        internal void ExecuteCommand(string line)
+        {
+            string[] parts = line.Trim().Split(new[] { ' ', '\t' }, 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) return;
+            string argument = parts.Length == 2 ? parts[1].Trim() : "";
+            try
+            {
+                switch (parts[0].ToLowerInvariant())
+                {
+                    case "/help":
+                        report("/settings                 Show current settings\n" +
+                            "/hotkey Ctrl+Alt+P        Change the trigger shortcut\n" +
+                            "/speed 30                Milliseconds between characters (0-1000)\n" +
+                            "/multiline on|off        Send Enter for line breaks, or use spaces\n" +
+                            "/pause   /resume         Disable or enable the shortcut\n" +
+                            "/quit                    End this session\n" +
+                            "Shortcut, speed and multiline changes are saved automatically.");
+                        break;
+                    case "/settings":
+                    case "/status":
+                        report("Hotkey: " + hotkey + " | Speed: " + interval + " ms | Multiline: " +
+                            (multiline ? "on" : "off") + " | " + (triggerRegistered ? "active" : "paused"));
+                        break;
+                    case "/hotkey":
+                        ChangeHotkey(argument);
+                        ReportSetting("Hotkey: " + hotkey);
+                        break;
+                    case "/speed":
+                        int value;
+                        if (!Int32.TryParse(argument, out value) || value < 0 || value > 1000)
+                            throw new ArgumentException("Use /speed 0-1000 (milliseconds per character).");
+                        interval = value;
+                        ReportSetting("Speed: " + interval + " ms per character.");
+                        break;
+                    case "/multiline":
+                        if (!argument.Equals("on", StringComparison.OrdinalIgnoreCase) &&
+                            !argument.Equals("off", StringComparison.OrdinalIgnoreCase))
+                            throw new ArgumentException("Use /multiline on or /multiline off.");
+                        multiline = argument.Equals("on", StringComparison.OrdinalIgnoreCase);
+                        ReportSetting(multiline ? "Multiline on: line breaks send Enter and may submit forms." : "Multiline off: line breaks become spaces.");
+                        break;
+                    case "/pause":
+                        if (triggerRegistered) desktop.Unregister(activeTriggerId);
+                        triggerRegistered = false;
+                        report("Paused. Enter /resume to enable the shortcut.");
+                        break;
+                    case "/resume":
+                        if (!triggerRegistered)
+                        {
+                            uint modifiers, key;
+                            Keyboard.ParseHotkey(hotkey, out modifiers, out key);
+                            desktop.Register(activeTriggerId, modifiers, key);
+                            triggerRegistered = true;
+                        }
+                        report("Shortcut active: " + hotkey);
+                        break;
+                    case "/quit":
+                    case "/exit": Stop(); break;
+                    default: report("Unknown command. Enter /help for available commands."); break;
+                }
+            }
+            catch (Exception ex) { report("Settings unchanged: " + ex.Message); }
+        }
+
+        private void ReportSetting(string message)
+        {
+            if (settingsPath != null)
+            {
+                try
+                {
+                    new Settings { Hotkey = hotkey, Interval = interval, Multiline = multiline }.Save(settingsPath);
+                    message += " Saved.";
+                }
+                catch (Exception ex)
+                {
+                    message += " Applied for this session, but could not save: " + ex.Message;
+                }
+            }
+            report(message);
+        }
+
+        private void ChangeHotkey(string value)
+        {
+            uint modifiers, key, oldModifiers, oldKey;
+            Keyboard.ParseHotkey(value, out modifiers, out key);
+            Keyboard.ParseHotkey(hotkey, out oldModifiers, out oldKey);
+            if (modifiers == oldModifiers && key == oldKey) return;
+            if (triggerRegistered)
+            {
+                // Register first: an occupied shortcut must not disable the working one.
+                int replacementId = activeTriggerId == TriggerId ? 3 : TriggerId;
+                desktop.Register(replacementId, modifiers, key);
+                desktop.Unregister(activeTriggerId);
+                activeTriggerId = replacementId;
+            }
+            hotkey = value;
         }
 
         // null text means a single clipboard snapshot; manual text comes from the terminal prompt.
@@ -179,8 +298,8 @@ namespace OpenPaste
         {
             if (!Native.RegisterHotKey(IntPtr.Zero, id, modifiers | 0x4000, key))
                 throw new Win32Exception(Marshal.GetLastWin32Error(),
-                    id == Session.TriggerId ? "Cannot register hotkey. Close the other session or use -Hotkey Ctrl+Alt+P." :
-                    "Cannot register Esc for cancellation. Input was not started.");
+                    id == Session.CancelId ? "Cannot register Esc for cancellation. Input was not started." :
+                    "Cannot register hotkey. Close the other session or choose another shortcut.");
         }
         public void Unregister(int id) { Native.UnregisterHotKey(IntPtr.Zero, id); }
         public bool ReadHotkey(out int id)
@@ -266,12 +385,153 @@ namespace OpenPaste
         }
     }
 
+    internal sealed class Settings
+    {
+        internal string Hotkey = "Ctrl+Alt+V";
+        internal int Interval = 10;
+        internal bool Multiline;
+
+        internal static Settings Load(string path)
+        {
+            var settings = new Settings();
+            if (!File.Exists(path)) return settings;
+            foreach (string line in File.ReadAllLines(path))
+            {
+                if (String.IsNullOrWhiteSpace(line)) continue;
+                string[] pair = line.Split(new[] { '=' }, 2);
+                if (pair.Length != 2) throw new FormatException("Invalid settings file.");
+                switch (pair[0])
+                {
+                    case "hotkey": settings.Hotkey = pair[1]; break;
+                    case "interval_ms": settings.Interval = Int32.Parse(pair[1]); break;
+                    case "multiline": settings.Multiline = Boolean.Parse(pair[1]); break;
+                    default: throw new FormatException("Unknown setting: " + pair[0]);
+                }
+            }
+            settings.Validate();
+            return settings;
+        }
+
+        private void Validate()
+        {
+            uint modifiers, key;
+            Keyboard.ParseHotkey(Hotkey, out modifiers, out key);
+            if (Hotkey.IndexOfAny(new[] { '\r', '\n' }) >= 0 || Interval < 0 || Interval > 1000)
+                throw new FormatException("Invalid saved shortcut or speed.");
+        }
+
+        internal void Save(string path)
+        {
+            Validate();
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllLines(temporary, new[] { "hotkey=" + Hotkey, "interval_ms=" + Interval,
+                    "multiline=" + Multiline }, Encoding.UTF8);
+                if (File.Exists(path)) File.Replace(temporary, path, null);
+                else File.Move(temporary, path);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+    }
+
+    internal sealed class ConsoleCommands
+    {
+        private readonly StringBuilder line = new StringBuilder();
+        private readonly ConcurrentQueue<string> redirected = new ConcurrentQueue<string>();
+        private readonly bool isRedirected = Console.IsInputRedirected;
+
+        internal ConsoleCommands()
+        {
+            if (isRedirected)
+            {
+                // A piped command stream can block; this process-owned reader never handles hotkeys.
+                var reader = new Thread(delegate()
+                {
+                    try
+                    {
+                        string value;
+                        while ((value = Console.ReadLine()) != null) redirected.Enqueue(value);
+                    }
+                    catch (IOException) { }
+                    finally { redirected.Enqueue("/quit"); }
+                });
+                reader.IsBackground = true;
+                reader.Start();
+            }
+        }
+
+        internal string Poll()
+        {
+            if (isRedirected)
+            {
+                string value;
+                return redirected.TryDequeue(out value) ? value : null;
+            }
+            while (Console.KeyAvailable)
+            {
+                ConsoleKeyInfo key = Console.ReadKey(true);
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    Console.WriteLine();
+                    string value = line.ToString();
+                    line.Clear();
+                    return value;
+                }
+                if (key.Key == ConsoleKey.Backspace && line.Length > 0)
+                {
+                    line.Length--;
+                    Console.Write("\b \b");
+                }
+                else if (!Char.IsControl(key.KeyChar) && line.Length < 512)
+                {
+                    line.Append(key.KeyChar);
+                    Console.Write(key.KeyChar);
+                }
+            }
+            return null;
+        }
+
+        internal void Report(string message)
+        {
+            if (!isRedirected) Console.WriteLine();
+            Console.WriteLine(message);
+            if (!isRedirected) Console.Write("openpaste> " + line);
+        }
+    }
+
     public static class Program
     {
         public static void Run(string hotkey, int interval, bool multiline)
         {
             var session = new Session(new Desktop(), Console.WriteLine, interval, multiline);
             WithConsoleHandler(session, delegate { session.Run(hotkey); });
+        }
+
+        public static void RunConfigured(string hotkey, int interval, int multiline)
+        {
+            string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "OpenPaste", "settings.ini");
+            RunConfiguredAt(hotkey, interval, multiline, path);
+        }
+
+        internal static void RunConfiguredAt(string hotkey, int interval, int multiline, string path)
+        {
+            Settings settings;
+            try { settings = Settings.Load(path); }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Could not load saved settings; using defaults: " + ex.Message);
+                settings = new Settings();
+            }
+            if (!String.IsNullOrEmpty(hotkey)) settings.Hotkey = hotkey;
+            if (interval >= 0) settings.Interval = interval;
+            if (multiline >= 0) settings.Multiline = multiline != 0;
+            var commands = new ConsoleCommands();
+            var session = new Session(new Desktop(), commands.Report, settings.Interval, settings.Multiline,
+                commands.Poll, path);
+            WithConsoleHandler(session, delegate { session.Run(settings.Hotkey); });
         }
 
         public static bool TypeManual(string text, int delaySeconds, int interval, bool multiline)
