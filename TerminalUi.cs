@@ -150,12 +150,11 @@ namespace OpenPaste
     internal sealed class TerminalFrame
     {
         internal static readonly string[] Logo = {
-            @"                                      _",
-            @"  ___  _ __   ___ _ __  _ __   __ _ ___| |_ ___",
-            @" / _ \| '_ \ / _ \ '_ \| '_ \ / _" + (char)96 + @" / __| __/ _ \",
-            @"| (_) | |_) |  __/ | | | |_) | (_| \__ \ ||  __/",
-            @" \___/| .__/ \___|_| |_| .__/ \__,_|___/\__\___|",
-            @"      |_|             |_|"
+            " ██████  ██████  ███████ ███    ██ ██████   █████  ███████ ████████ ███████",
+            "██    ██ ██   ██ ██      ████   ██ ██   ██ ██   ██ ██         ██    ██",
+            "██    ██ ██████  █████   ██ ██  ██ ██████  ███████ ███████    ██    █████",
+            "██    ██ ██      ██      ██  ██ ██ ██      ██   ██      ██    ██    ██",
+            " ██████  ██      ███████ ██   ████ ██      ██   ██ ███████    ██    ███████"
         };
         internal readonly List<TerminalLine> Lines = new List<TerminalLine>();
         internal int CursorRow, CursorColumn;
@@ -168,7 +167,8 @@ namespace OpenPaste
             var frame = new TerminalFrame();
             Action<string, LineTone> add = delegate(string text, LineTone tone)
                 { frame.Lines.Add(new TerminalLine(ScreenCells.Clip(text, width), tone)); };
-            if (width >= 54 && limit >= 22)
+            add("", LineTone.Normal);
+            if (width >= 75 && limit >= 22)
                 foreach (string row in Logo) add(row, LineTone.Accent);
             else add("openpaste", LineTone.Accent);
             if (limit >= 12)
@@ -183,7 +183,7 @@ namespace OpenPaste
                 add(hotkey + (active ? "" : " · 已暂停"), LineTone.Muted);
                 if (limit >= 12) add("间隔 " + interval + " ms · 多行" + (multiline ? "开启" : "关闭"), LineTone.Muted);
             }
-            add(new string('─', Math.Min(width, 70)), LineTone.Muted);
+            add(new string('─', Math.Min(width, 75)), LineTone.Muted);
             frame.CursorRow = frame.Lines.Count;
             int start = 0;
             while (ScreenCells.Width(editor.Text.Substring(start, editor.Cursor - start)) >= width - 2)

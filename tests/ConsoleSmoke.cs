@@ -90,7 +90,7 @@ namespace OpenPaste
         private static void MenuChecks(string directory)
         {
             File.WriteAllText(Path.Combine(directory, "startup.txt"),
-                WaitScreen(x => x.Contains("Ctrl+Alt+Shift+F24") && x.Contains("|_|"), "Logo missing"));
+                WaitScreen(x => x.Contains("Ctrl+Alt+Shift+F24") && x.Contains("██████"), "Logo missing"));
             Type("/");
             File.WriteAllText(Path.Combine(directory, "menu.txt"),
                 WaitScreen(x => x.Contains("/settings") && x.Contains("/quit") && x.Contains("/multiline"), "Menu did not open"));

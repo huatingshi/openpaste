@@ -119,7 +119,7 @@ namespace OpenPaste
                         if (row.Tone == LineTone.Selected) { selected++; Assert(row.Text.Contains("/quit"), "selected option hidden"); }
                     }
                     Assert(selected == 1, "selection scrolled out of the menu");
-                    if (width < 54) Assert(frame.Lines[0].Text == "openpaste", "compact logo missing");
+                    if (width < 75) Assert(frame.Lines[1].Text == "openpaste", "compact logo missing");
                 }
             });
             Test("long command lines scroll horizontally to keep the cursor visible", delegate
@@ -137,7 +137,7 @@ namespace OpenPaste
                 TerminalFrame frame = TerminalFrame.Build(new CommandEditor(), "Ctrl+Alt+P", 75, true, false, "", 100, 30);
                 string text = String.Join("\n", frame.Lines.ConvertAll(row => row.Text));
                 Assert(text.Contains("Ctrl+Alt+P") && text.Contains("75 ms") && text.Contains("开启") && text.Contains("已暂停"), "stale status values");
-                Assert(frame.Lines[0].Text == TerminalFrame.Logo[0], "wide logo missing");
+                Assert(frame.Lines[1].Text == TerminalFrame.Logo[0], "wide logo missing");
             });
             Test("reports preserve a partially edited command and its menu selection", delegate
             {
