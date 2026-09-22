@@ -3,17 +3,18 @@ $dest = Join-Path $env:USERPROFILE 'bin'
 $base = 'https://raw.githubusercontent.com/huatingshi/openpaste/main'
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
-if ($PSScriptRoot) {
-  Copy-Item (Join-Path $PSScriptRoot 'openpaste.ps1') (Join-Path $dest 'openpaste.ps1') -Force
-  Copy-Item (Join-Path $PSScriptRoot 'openpaste.cmd') (Join-Path $dest 'openpaste.cmd') -Force
-} else {
-  Invoke-WebRequest "$base/openpaste.ps1" -UseBasicParsing -OutFile (Join-Path $dest 'openpaste.ps1')
-  Invoke-WebRequest "$base/openpaste.cmd" -UseBasicParsing -OutFile (Join-Path $dest 'openpaste.cmd')
+foreach ($file in @('openpaste.ps1', 'openpaste.cmd', 'OpenPasteHost.cs', 'TerminalUi.cs')) {
+  if ($PSScriptRoot) {
+    Copy-Item (Join-Path $PSScriptRoot $file) (Join-Path $dest $file) -Force
+  } else {
+    Invoke-WebRequest "$base/$file" -UseBasicParsing -OutFile (Join-Path $dest $file)
+  }
 }
 
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ([string]::IsNullOrEmpty($userPath)) { $userPath = '' }
-if ($userPath -notlike "*$dest*") {
+$pathEntries = @($userPath -split ';' | ForEach-Object { $_.Trim().TrimEnd('\') })
+if ($pathEntries -notcontains $dest.TrimEnd('\')) {
   $joined = if ($userPath.Trim().Length -eq 0) { $dest } else { $userPath.TrimEnd(';') + ';' + $dest }
   [Environment]::SetEnvironmentVariable('Path', $joined, 'User')
 }
